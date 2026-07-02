@@ -1,12 +1,11 @@
 import * as Clipboard from 'expo-clipboard';
-import * as FileSystem from 'expo-file-system/legacy';
+import { Directory, File, Paths } from 'expo-file-system';
 import type * as ImagePicker from 'expo-image-picker';
 import { Platform } from 'react-native';
 
 import { getFileSize } from '../../utils/files';
 import { imageSize } from '../../utils/images';
 
-const CLIPBOARD_IMAGE_DIR = `${FileSystem.cacheDirectory ?? ''}clipboard-images/`;
 const CLIPBOARD_IMAGE_EXTENSIONS: Record<string, string> = {
   'image/jpeg': '.jpg',
   'image/jpg': '.jpg',
@@ -87,21 +86,15 @@ export const createImageAssetFromClipboardData = async (clipboardData: {
   data: string;
   mimeType: string;
 }): Promise<ImagePicker.ImagePickerAsset> => {
-  if (!FileSystem.cacheDirectory) {
-    throw new Error('File system cache directory is unavailable');
-  }
-
   const { base64Data, mimeType } = normalizeClipboardImageData(clipboardData);
   const extension = getClipboardImageExtension(mimeType);
   const id = `clipboard-${Date.now()}`;
-  const uri = `${CLIPBOARD_IMAGE_DIR}${id}${extension}`;
 
-  await FileSystem.makeDirectoryAsync(CLIPBOARD_IMAGE_DIR, {
-    intermediates: true,
-  });
-  await FileSystem.writeAsStringAsync(uri, base64Data, {
-    encoding: FileSystem.EncodingType.Base64,
-  });
+  const imageDirectory = new Directory(Paths.cache, 'clipboard-images');
+  imageDirectory.create({ intermediates: true, idempotent: true });
+  const imageFile = new File(imageDirectory, `${id}${extension}`);
+  imageFile.write(base64Data, { encoding: 'base64' });
+  const uri = imageFile.uri;
 
   let width = 300;
   let height = 300;
