@@ -1,6 +1,5 @@
 import * as DocumentPicker from 'expo-document-picker';
-import { Directory as ExpoDirectory } from 'expo-file-system';
-import * as FileSystem from 'expo-file-system/legacy';
+import { Directory as ExpoDirectory, File as ExpoFile } from 'expo-file-system';
 
 export type NotesImportSource = {
   relativePath: string;
@@ -462,9 +461,8 @@ async function selectNotesImportSourcesFromNative(mode: NotesImportMode) {
 
   if (result.assets == null || result.assets.length === 0) return null;
 
-  return readNotesImportSourcesFromDocumentPickerAssets(
-    result.assets,
-    FileSystem.readAsStringAsync
+  return readNotesImportSourcesFromDocumentPickerAssets(result.assets, (uri) =>
+    new ExpoFile(uri).text()
   );
 }
 
