@@ -65,6 +65,7 @@ export { default as Notifications } from './Notifications.svg';
 export { default as NotificationsFilled } from './NotificationsFilled.svg';
 export { default as OrderedList } from './OrderedList.svg';
 export { default as Overflow } from './Overflow.svg';
+export { default as Phone } from './Phone.svg';
 export { default as Pin } from './Pin.svg';
 export { default as Placeholder } from './Placeholder.svg';
 export { default as Play } from './Play.svg';

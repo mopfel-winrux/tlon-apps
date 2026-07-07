@@ -1,6 +1,10 @@
 import { useConnectionStatus, useDebouncedValue } from '@tloncorp/shared';
 import * as db from '@tloncorp/shared/db';
-import { useContact, useNotesDeskAvailable } from '@tloncorp/shared/store';
+import {
+  useCampfireDeskAvailable,
+  useContact,
+  useNotesDeskAvailable,
+} from '@tloncorp/shared/store';
 import { useIsWindowNarrow } from '@tloncorp/ui';
 import {
   Fragment,
@@ -14,6 +18,7 @@ import {
 } from 'react';
 
 import { useCurrentUserId } from '../../contexts/appDataContext';
+import { useCampfireCalls } from '../../../contexts/campfireCalls';
 import { getChannelHost, useChatDescription, useChatTitle } from '../../utils';
 import { ContactAvatar } from '../Avatar';
 import ConnectionStatus from '../ConnectionStatus';
@@ -150,6 +155,22 @@ export function ChannelHeader({
   const dmContactId = channel.type === 'dm' ? channel.contactId : null;
   const { data: dmContact } = useContact({ id: dmContactId || '' });
   const { data: notesAvailable = false } = useNotesDeskAvailable();
+  const { data: campfireAvailable = false } = useCampfireDeskAvailable();
+  const campfireCalls = useCampfireCalls();
+
+  // Audio calls need the campfire desk on the ship and a mounted call
+  // provider (web only), and are 1:1 so only offered in DMs.
+  const canStartCall =
+    campfireCalls.supported &&
+    campfireAvailable &&
+    !!dmContactId &&
+    !campfireCalls.activeCall;
+
+  const handleStartCall = useCallback(() => {
+    if (dmContactId) {
+      campfireCalls.placeCall(dmContactId);
+    }
+  }, [dmContactId, campfireCalls]);
 
   const getChannelTypeName = useCallback(
     (channelType: db.Channel['type']) => {
@@ -384,6 +405,13 @@ export function ChannelHeader({
       leftControls={goBack && <ScreenHeader.BackButton onPress={goBack} />}
       rightControls={
         <>
+          {canStartCall && (
+            <ScreenHeader.IconButton
+              type="Phone"
+              onPress={handleStartCall}
+              testID="ChannelHeaderCallButton"
+            />
+          )}
           {showSearchButton && (
             <ScreenHeader.IconButton type="Search" onPress={goToSearch} />
           )}

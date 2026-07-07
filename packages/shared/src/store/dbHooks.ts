@@ -63,6 +63,17 @@ export const useNotesDeskAvailable = () => {
   });
 };
 
+// Probe kiln once to detect whether the campfire desk is installed and
+// running on the user's ship. Used to gate call affordances (DM header call
+// button). Defaults to false until the request resolves.
+export const useCampfireDeskAvailable = () => {
+  return useQuery({
+    queryKey: ['campfireDeskAvailable'],
+    queryFn: () => api.checkCampfireInstalled(),
+    staleTime: 60_000,
+  });
+};
+
 export const useUnjoinedGroupChannels = (groupId: string) => {
   const deps = useKeyFromQueryDeps(db.getUnjoinedGroupChannels);
   return useQuery({

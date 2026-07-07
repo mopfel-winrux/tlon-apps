@@ -73,6 +73,7 @@ import { preSig } from '@/logic/utils';
 import { toggleDevTools, useLocalState, useShowDevTools } from '@/state/local';
 import { useTheme } from '@/state/settings';
 
+import { CampfireCallProvider } from './campfire/CampfireCallProvider';
 import { DesktopLoginScreen } from './components/DesktopLoginScreen';
 import { isElectron } from './electron-bridge';
 
@@ -338,6 +339,7 @@ function AppRoutes() {
       webAppNeedsUpdate={needsUpdate}
       triggerWebAppUpdate={triggerUpdate}
     >
+      <CampfireCallProvider>
       {isMobile ? (
         <NavigationContainer<MobileBasePathStackParamList>
           key="mobile"
@@ -381,6 +383,7 @@ function AppRoutes() {
           </ForwardPostSheetProvider>
         </NavigationContainer>
       )}
+      </CampfireCallProvider>
     </AppDataProvider>
   );
 }

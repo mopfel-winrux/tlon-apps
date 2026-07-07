@@ -1,6 +1,7 @@
 export { udToDate } from './apiUtils';
 export * from './a2ui';
 export * from './channelContentConfig';
+export * from './campfireApi';
 export * from './channelsApi';
 export * from './chatApi';
 export * from './contactsApi';

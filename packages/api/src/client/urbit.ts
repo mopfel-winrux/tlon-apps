@@ -263,7 +263,16 @@ function printEndpoint(endpoint: UrbitEndpoint) {
 
 export async function subscribe<T>(
   endpoint: UrbitEndpoint,
-  handler: (update: T, id?: number) => void
+  handler: (update: T, id?: number) => void,
+  options?: {
+    /** Set false for subscriptions the agent kicks as part of its protocol
+     * (e.g. one-shot or per-session paths) so a kick isn't answered by
+     * resubscribing to a path that no longer exists. */
+    resubOnQuit?: boolean;
+    /** Handle a kick locally instead of treating it as a connection
+     * discontinuity. */
+    onQuit?: () => void;
+  }
 ): Promise<number> {
   const doSub = async (err?: (error: any, id: string) => void) => {
     if (!config.client) {
@@ -276,6 +285,7 @@ export async function subscribe<T>(
     return config.client.subscribe({
       app: endpoint.app,
       path: endpoint.path,
+      resubOnQuit: options?.resubOnQuit,
       event: (event: any, mark: string, id?: number) => {
         logger.debug(
           `got subscription event on ${printEndpoint(endpoint)}:`,
@@ -307,7 +317,11 @@ export async function subscribe<T>(
       },
       quit: () => {
         logger.log('subscription quit on', printEndpoint(endpoint));
-        config.onQuitOrReset?.('subscriptionQuit', printEndpoint(endpoint));
+        if (options?.onQuit) {
+          options.onQuit();
+        } else {
+          config.onQuitOrReset?.('subscriptionQuit', printEndpoint(endpoint));
+        }
       },
       err: (error, id) => {
         logger.trackError(`subscribe error on ${printEndpoint(endpoint)}`, {
