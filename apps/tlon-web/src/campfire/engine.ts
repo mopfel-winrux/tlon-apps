@@ -9,7 +9,14 @@
  * 'connected-their-turn' / 'connected-our-turn-asked'), and clients request a
  * turn with 'ask-signal' pokes rather than sending immediately.
  */
-import { poke, subscribe, subscribeOnce, unsubscribe } from '@tloncorp/api';
+import {
+  BadResponseError,
+  poke,
+  scry,
+  subscribe,
+  subscribeOnce,
+  unsubscribe,
+} from '@tloncorp/api';
 
 const SWITCHBOARD = 'rtcswitchboard';
 const MARK = 'rtcswitchboard-from-client';
@@ -20,11 +27,15 @@ export const CALL_DAP = 'campfire';
 
 type SignalType = 'offer' | 'answer';
 
-type SwitchboardState =
+export type SwitchboardState =
+  | 'placing'
   | 'dialing'
+  | 'ringing'
   | 'incoming-ringing'
+  | 'answering'
   | 'connected-our-turn'
   | 'connected-their-turn'
+  | 'connected-want-turn'
   | 'connected-our-turn-asked';
 
 type SignallingStateName =
@@ -49,6 +60,8 @@ interface IncomingFact {
 
 export interface CampfireCallHandlers {
   onSwitchboardState: (state: SwitchboardState) => void;
+  /** Actual WebRTC transport state — the truth about whether media flows. */
+  onMediaState: (state: RTCPeerConnectionState) => void;
   onRemoteStream: (stream: MediaStream) => void;
   onLocalStream: (stream: MediaStream) => void;
   onEnded: () => void;
@@ -172,6 +185,7 @@ class SignallingState {
 export class CampfireCall {
   readonly peer: string;
   readonly isCaller: boolean;
+  readonly isReconnect: boolean;
   uuid: string | null;
 
   private pc: RTCPeerConnection;
@@ -183,18 +197,31 @@ export class CampfireCall {
   private localStream: MediaStream | null = null;
   private remoteStream = new MediaStream();
   private closed = false;
+  private iceRestartAttempts = 0;
+  private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private unloading = false;
+  private markUnloading = () => {
+    this.unloading = true;
+  };
 
   constructor(
     peer: string,
     uuid: string | null,
     handlers: CampfireCallHandlers,
-    configuration?: RTCConfiguration
+    configuration?: RTCConfiguration,
+    options?: { reconnect?: boolean }
   ) {
     this.peer = peer;
     this.uuid = uuid;
+    this.isReconnect = options?.reconnect ?? false;
     this.isCaller = uuid === null;
     this.handlers = handlers;
     this.pc = new RTCPeerConnection(configuration);
+    // Pokes aborted by page navigation reject with fetch errors; without
+    // this guard the resulting closeWithError would send a real reject poke
+    // and erase the call the next page load could otherwise rejoin.
+    window.addEventListener('beforeunload', this.markUnloading);
+    window.addEventListener('pagehide', this.markUnloading);
     this.signallingReadyPromise = new Promise<void>((ready) => {
       this.signallingReady = () => {
         this.signallingReady = () => {};
@@ -230,6 +257,46 @@ export class CampfireCall {
     this.pc.onnegotiationneeded = () => {
       this.askSendSignal('offer').catch((err) => this.closeWithError(err));
     };
+
+    this.pc.onconnectionstatechange = () => {
+      const state = this.pc.connectionState;
+      this.handlers.onMediaState(state);
+      if (state === 'connected') {
+        this.iceRestartAttempts = 0;
+        if (this.disconnectTimer) {
+          clearTimeout(this.disconnectTimer);
+          this.disconnectTimer = null;
+        }
+        return;
+      }
+      if (state === 'disconnected') {
+        // Give it a moment to self-recover before forcing an ICE restart.
+        this.disconnectTimer = setTimeout(() => {
+          if (this.pc.connectionState === 'disconnected') {
+            this.tryIceRestart();
+          }
+        }, 2000);
+        return;
+      }
+      if (state === 'failed' && !this.tryIceRestart()) {
+        this.hangup();
+      }
+    };
+  }
+
+  private tryIceRestart(): boolean {
+    if (this.closed || this.iceRestartAttempts >= 3) {
+      return false;
+    }
+    this.iceRestartAttempts += 1;
+    try {
+      // Triggers negotiationneeded, which renegotiates over the switchboard.
+      this.pc.restartIce();
+      return true;
+    } catch (err) {
+      console.warn('ICE restart failed', err);
+      return false;
+    }
   }
 
   get micMuted(): boolean {
@@ -238,7 +305,14 @@ export class CampfireCall {
   }
 
   async start() {
-    if (this.isCaller) {
+    if (this.isReconnect) {
+      // Rejoining a call that survived a page reload: the switchboard still
+      // has it in a connected state, so signalling turns are already
+      // available. Adding our tracks below renegotiates media from scratch.
+      this.handlers.onSwitchboardState('connected-their-turn');
+      await this.subscribeToCall();
+      this.signallingReady();
+    } else if (this.isCaller) {
       this.handlers.onSwitchboardState('dialing');
       await this.dial();
     } else {
@@ -259,6 +333,30 @@ export class CampfireCall {
     // Adding tracks fires negotiationneeded, which queues an offer to be
     // sent once the switchboard grants us a turn.
     stream.getTracks().forEach((track) => this.pc.addTrack(track, stream));
+  }
+
+  /** Switch the microphone without renegotiating, preserving mute state. */
+  async setAudioDevice(deviceId: string) {
+    const sender = this.pc.getSenders().find((s) => s.track?.kind === 'audio');
+    if (!sender || this.closed) {
+      return;
+    }
+    const wasMuted = this.micMuted;
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { deviceId: { exact: deviceId } },
+      video: false,
+    });
+    const newTrack = stream.getAudioTracks()[0];
+    if (!newTrack) {
+      return;
+    }
+    newTrack.enabled = !wasMuted;
+    await sender.replaceTrack(newTrack);
+    this.localStream?.getAudioTracks().forEach((t) => {
+      this.localStream?.removeTrack(t);
+      t.stop();
+    });
+    this.localStream?.addTrack(newTrack);
   }
 
   /** Ask the switchboard for a call uuid; it responds with one fact on
@@ -418,6 +516,9 @@ export class CampfireCall {
   }
 
   private closeWithError(err: unknown) {
+    if (this.unloading) {
+      return;
+    }
     console.error('campfire call error', err);
     this.hangup();
     this.handlers.onError(err);
@@ -441,6 +542,12 @@ export class CampfireCall {
 
   private teardown() {
     this.closed = true;
+    window.removeEventListener('beforeunload', this.markUnloading);
+    window.removeEventListener('pagehide', this.markUnloading);
+    if (this.disconnectTimer) {
+      clearTimeout(this.disconnectTimer);
+      this.disconnectTimer = null;
+    }
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.remoteStream.getTracks().forEach((t) => t.stop());
     try {
@@ -461,6 +568,32 @@ export class CampfireCall {
       muted = !t.enabled;
     });
     return muted;
+  }
+}
+
+export type LiveCallCheck =
+  | { status: 'live'; state: string }
+  | { status: 'gone' }
+  | { status: 'unknown' };
+
+/** Whether the switchboard still has a live call with this uuid — used to
+ * detect a call orphaned by a page reload. 'unknown' means the scry itself
+ * failed (e.g. during early boot) and the answer should be retried, not
+ * treated as gone. */
+export async function checkLiveCall(uuid: string): Promise<LiveCallCheck> {
+  try {
+    const state = await scry<string>({
+      app: SWITCHBOARD,
+      path: `/call/${uuid}/connection-state`,
+    });
+    return state == null
+      ? { status: 'gone' }
+      : { status: 'live', state: String(state) };
+  } catch (err) {
+    if (err instanceof BadResponseError && err.status === 404) {
+      return { status: 'gone' };
+    }
+    return { status: 'unknown' };
   }
 }
 

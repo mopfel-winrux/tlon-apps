@@ -165,6 +165,8 @@ export function ChannelHeader({
     campfireAvailable &&
     !!dmContactId &&
     !campfireCalls.activeCall;
+  const inCallWithPeer =
+    !!dmContactId && campfireCalls.activeCall?.peer === dmContactId;
 
   const handleStartCall = useCallback(() => {
     if (dmContactId) {
@@ -411,6 +413,15 @@ export function ChannelHeader({
               onPress={handleStartCall}
               testID="ChannelHeaderCallButton"
             />
+          )}
+          {inCallWithPeer && (
+            <ScreenHeader.TextButton
+              onPress={campfireCalls.hangup}
+              testID="ChannelHeaderEndCallButton"
+              color="$negativeActionText"
+            >
+              End call
+            </ScreenHeader.TextButton>
           )}
           {showSearchButton && (
             <ScreenHeader.IconButton type="Search" onPress={goToSearch} />
